@@ -35,6 +35,7 @@ function quadrotor_dynamics(model::NamedTuple,x,u)
     w2 = u[2]
     w3 = u[3]
     w4 = u[4]
+    f_rope = u[5:7]
 
     F1 = max(0,kf*w1)
     F2 = max(0,kf*w2)
@@ -48,7 +49,7 @@ function quadrotor_dynamics(model::NamedTuple,x,u)
     M4 = km*w4
     τ = [L*(F2-F4), L*(F3-F1), (M1-M2+M3-M4)] #total rotor torque in body frame
 
-    f = mass*gravity + Q*F # forces in world frame
+    f = mass*gravity + Q*F + f_rope # forces in world frame
 
     # this is xdot 
     [
@@ -104,4 +105,31 @@ function animate_quadrotor(Xsim, Xref, dt)
     mc.setanimation!(vis, anim)
 
     return (mc.render(vis))
+end
+
+function load_dynamics(model::NamedTuple,x,u)
+    # load dynamics
+    r = x[1:3]     # position in world frame
+    v = x[4:6]     # position in body frame
+    a = u[1:3]     # acceleration in world frame
+    a[3] -= model.gravity
+    x_dot = [
+        v
+        a
+    ]
+    return x_dot
+end
+
+function combined_dynamics(model::NamedTuple,x,u)
+    # combined dynamics
+    n = model.n
+    x_lift = x[1:12]
+    x_load = x[13:18]
+    u_lift = u[1:7]
+    u_load = u[8:10]
+
+    x_lift_dot = quadrotor_dynamics(model,x_lift,u_lift)
+    x_load_dot = load_dynamics(model,x_load,u_load)
+
+    return [x_lift_dot; x_load_dot]
 end
