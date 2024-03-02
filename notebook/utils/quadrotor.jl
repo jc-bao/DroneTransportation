@@ -82,24 +82,42 @@ function vis_traj!(vis, name, X; R = 0.1, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
     end
 end
 
-function animate_quadrotor(Xsim, Xref, dt)
+function cable_transform(y,z)
+    v1 = [0,0,1]
+    v2 = y[1:3,1] - z[1:3,1]
+    normalize!(v2)
+    ax = cross(v1,v2)
+    ang = acos(v1'v2)
+    R = AngleAxis(ang,ax...)
+    compose(Translation(z),LinearMap(R))
+end
+
+function animate_quadrotor_load(Xsim, Xref, dt)
     # animate quadrotor, show Xref with vis_traj!, and track Xref with the green sphere
     vis = mc.Visualizer()
     robot_obj = mc.MeshFileGeometry(joinpath(@__DIR__,"quadrotor.obj"))
     mc.setobject!(vis[:vic], robot_obj)
+    load_obj = mc.HyperSphere(mc.Point(0,0,0.0),0.2)
+    mc.setobject!(vis[:load], load_obj, mc.MeshPhongMaterial(color = mc.RGBA(0.0,0.0,1.0,0.4)))
+    cable = Cylinder(Point3f0(0,0,0),Point3f0(0,0,0.5),convert(Float32,0.01))
+    mc.setobject!(vis[:cable], cable, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.0,0.0,1.0)))
 
     vis_traj!(vis, :traj, Xref; R = 0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
     target = mc.HyperSphere(mc.Point(0,0,0.0),0.1)
     mc.setobject!(vis[:target], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,0.4)))
-
+    mc.setobject!(vis[:target_load], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,0.4)))
 
     anim = mc.Animation(floor(Int,1/dt))
     for k = 1:length(Xsim)
         mc.atframe(anim, k) do
             r = Xsim[k][1:3]
             p = Xsim[k][7:9]
+            r_load = Xsim[k][13:15]
             mc.settransform!(vis[:vic], mc.compose(mc.Translation(r),mc.LinearMap(1.5*(dcm_from_mrp(p)))))
+            mc.settransform!(vis[:load], mc.Translation(r_load))
+            settransform!(vis["cable"], cable_transform(r,r_load))
             mc.settransform!(vis[:target], mc.Translation(Xref[k][1:3]))
+            mc.settransform!(vis[:target_load], mc.Translation(Xref[k][13:15]))
         end
     end
     mc.setanimation!(vis, anim)
@@ -111,8 +129,7 @@ function load_dynamics(model::NamedTuple,x,u)
     # load dynamics
     r = x[1:3]     # position in world frame
     v = x[4:6]     # position in body frame
-    a = u[1:3]     # acceleration in world frame
-    a[3] -= model.gravity
+    a = u[1:3]/model.mass_load - model.gravity     # acceleration in world frame
     x_dot = [
         v
         a
@@ -122,11 +139,10 @@ end
 
 function combined_dynamics(model::NamedTuple,x,u)
     # combined dynamics
-    n = model.n
     x_lift = x[1:12]
     x_load = x[13:18]
     u_lift = u[1:7]
-    u_load = u[8:10]
+    u_load = -u[8:10]
 
     x_lift_dot = quadrotor_dynamics(model,x_lift,u_lift)
     x_load_dot = load_dynamics(model,x_load,u_load)
