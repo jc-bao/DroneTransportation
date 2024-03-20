@@ -57,22 +57,18 @@ end
 
 function eq_constraints(params::NamedTuple, Z::Vector)::Vector
 
-    c_dyn = zeros(eltype(Z), 22 * (params.N - 1))
+    c_dyn = zeros(eltype(Z), 19 * (params.N - 1))
     # dynamic constrains
     for i = 1:(params.N-1)
         xi = Z[params.idx.x[i]]
         xip1 = Z[params.idx.x[i+1]]
         ui = Z[params.idx.u[i]]
         # dynamics constraints
-        c_dyn[22*(i-1).+(1:18)] = hermite_simpson(params, xi, xip1, ui, params.model.dt)
-        # rope force constraints
-        ui_lift = ui[1:7]
-        ui_load = ui[8:10]
-        c_dyn[22*(i-1).+(19:21)] = ui_lift[5:7] + ui_load
+        c_dyn[19*(i-1).+(1:18)] = hermite_simpson(params, xi, xip1, ui, params.model.dt)
         # distance constraints
         r_lift = xi[1:3]
         r_load = xi[13:15]
-        c_dyn[22*(i-1)+22] = norm(r_lift - r_load)^2 - params.model.l^2
+        c_dyn[19*(i-1)+19] = norm(r_lift - r_load)^2 - params.model.l^2
     end
 
     # initial condition
@@ -89,18 +85,17 @@ end
 ## inequality constraint
 
 function ineq_constraints(params::NamedTuple, Z::Vector)::Vector
-    c = zeros(eltype(Z), 5 * (params.N - 1))
+    c = []
     for i = 1:(params.N-1)
         u = Z[params.idx.u[i]]
-        u_lift = u[1:7]
         # control limits
-        c[5*(i-1).+(1:4)] = u_lift[1:4]
+        c = [c; u[1:4]]
         # state constraints
         x = Z[params.idx.x[i+1]]
-        # ellipse_center_dist = sqrt(x[2]^2 + x[3]^2) 
-        # c[5*(i-1)+5] = ((ellipse_center_dist - 1.25) / 1.0)^2 + (x[1] / 0.3)^2 - 1
-        c[5*(i-1)+5] = x[1]^2 + x[2]^2 + (x[3]-0.3)^2 - 0.5^2
-
+        for pos_obs in params.obs
+            c = [c; norm(x[1:2:3]-pos_obs[1:2:3])^2 - params.r_obs^2]
+            c = [c; norm(x[13:2:15]-pos_obs[1:2:3])^2 - params.r_obs^2]
+        end
     end
     return c
 end
@@ -143,11 +138,9 @@ function quadrotor_navigation(; verbose=true)
     nx_lift = 12
     nx_load = 6
     nx = 12 + 6
-    nu_lift = 7
-    nu_load = 3
-    nu = 7 + 3
-    dt = 0.2
-    tf = 6.0
+    nu = 4 + 1
+    dt = 0.1
+    tf = 2.0
     t_vec = 0:dt:tf
     N = length(t_vec)
 
@@ -166,13 +159,13 @@ function quadrotor_navigation(; verbose=true)
 
     # load all useful things into params 
     Q = 1.0 * diagm([1.0 * ones(3); 0.1 * ones(3); 1.0 * ones(3); 1.0 * ones(3); 1.0 * ones(3); 0.1 * ones(3)])
-    R = diagm([0.1 * ones(4); zeros(3); zeros(3)])
+    R = diagm([0.1 * ones(4); zeros(1)])
     model = (mass=0.5, mass_load=0.5,
         J=Diagonal([0.0023, 0.0023, 0.004]),
         gravity=[0, 0, -9.81],
         L=0.1750, # drone arm length
         l=0.5, # rope length
-        kf=1.0, u_max=20.0 / 4.0,
+        kf=1.0, u_max=30.0 / 4.0,
         km=0.0245, dt=dt)
     params = (
         N=N,
@@ -180,31 +173,29 @@ function quadrotor_navigation(; verbose=true)
         nx_lift=nx_lift,
         nx_load=nx_load,
         nu=nu,
-        nu_lift=nu_lift,
-        nu_load=nu_load,
         Q=Q,
         R=R,
         model=model,
         xi=xi,
         xf=xf,
-        idx=idx
+        idx=idx, 
+        r_obs=0.5, 
+        obs=[[0.0, 0.0, 0.5], [0.0, 0.0, -0.6]]
     )
 
-    c_l = zeros(5 * (N - 1))
-    c_u = repeat([ones(4) .* params.model.u_max; ones(1)*Inf], N - 1)
+    c_l = zeros((4+2*2) * (N - 1))
+    c_u = repeat([ones(4) .* params.model.u_max; ones(2*2).*Inf], N - 1)
 
     # test constrain feasibility
     # test constrains
     x_test = zeros(18)
     x_test[15] = -0.5
-    u_lift1_test = ones(4) .* (1.0 * 9.81 / 4.0)
-    u_lift2_test = [0.0, 0.0, -0.5 * 9.81]
-    u_load_test = [0.0, 0.0, 0.5 * 9.81]
-    u_test = [u_lift1_test; u_lift2_test; u_load_test]
+    u_lift_test = ones(4) .* (1.0 * 9.81 / 4.0)
+    u_rope_test = [0.5 * 9.81]
+    u_test = [u_lift_test; u_rope_test]
     xu_test = [x_test; u_test]
     Z_test = repeat(xu_test, N - 1)
     Z_test = [Z_test; x_test]
-    eq_cons = eq_constraints(params, Z_test)
 
     @test all(eq_constraints(params, Z_test)[37:end] .≈ 0.0)
     @test all(ineq_constraints(params, Z_test) ≤ c_u)
@@ -219,10 +210,12 @@ function quadrotor_navigation(; verbose=true)
         z0[params.idx.x[i][15]] = x_guess[i][15]
         if i < params.N
             z0[params.idx.u[i]][1:4] = ones(4) .* (1.0 * 9.81 / 4.0)
-            z0[params.idx.u[i]][7] = -0.5 * 9.81
-            z0[params.idx.u[i]][10] = 0.5 * 9.81
+            z0[params.idx.u[i]][5] = 0.5 * 9.81
         end
     end
+
+    # load file .jld2 as initial guess
+    z0 = load("Z.jld2")["Z"]
 
     diff_type = :auto
 
@@ -243,14 +236,17 @@ function quadrotor_navigation(; verbose=true)
         verbose=verbose
     )
 
+    # save z to file
+    save("Z.jld2", "Z", Z)
+
     # return the trajectories 
     xs = [zeros(18) for _ = 1:params.N]
-    us = [zeros(10) for _ = 1:(params.N-1)]
+    us = [zeros(5) for _ = 1:(params.N-1)]
     for i = 1:params.N
         x = Z[params.idx.x[i]]
         xs[i] = x[1:18]
         if i < params.N
-            us = Z[params.idx.u[i]]
+            us[i] = Z[params.idx.u[i]]
         end
     end
 
@@ -262,7 +258,7 @@ end
 
 @time xs, us, t_vec, params = quadrotor_navigation()
 # save xs, us
-save("quadrotor_navigation.jld2", "xs", xs, "us", us, "t_vec", t_vec, "params", params)
+# save("quadrotor_navigation.jld2", "xs", xs, "us", us, "t_vec", t_vec, "params", params)
 
 # visualize
 
@@ -272,12 +268,12 @@ sleep(3.0)
 # plot xs and us
 # plot(t_vec, [x[1] for x in xs], label="x")
 # plot!(t_vec, [x[2] for x in xs], label="y")
-# plot!(t_vec, [x[3] for x in xs], label="z")
+# plot!(t_vec, [x[3] for x in xs], label=`"z")
 # plot!(t_vec[1:end-1], [u[5] for u in us], label="u5")
 # plot!(t_vec[1:end-1], [u[6] for u in us], label="u6")
 # plot!(t_vec[1:end-1], [u[7] for u in us], label="u7")
 # plot!(t_vec[1:end-1], [u[8] for u in us], label="u8")
-# plot!(t_vec[1:end-1], [u[9] for u in us], label="u9")
+# plot!(t_vec[1:end-1], [u[9] for u in us], labl="u9")
 # plot!(t_vec[1:end-1], [u[10] for u in us], label="u10")
 # # save to file
 # savefig("quadrotor_navigation.png")

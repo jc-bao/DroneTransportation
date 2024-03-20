@@ -105,10 +105,10 @@ function animate_quadrotor_load(Xsim, Xref, dt)
     # geom = mc.Cylinder(mc.Point3f0(-0.1,0,0.5),mc.Point3f0(0.1,0,0.5),convert(Float32,0.5))
     # mc.setobject!(vis[:cyl],geom,mc.MeshPhongMaterial(color = mc.RGBA(1, 0, 0, 1.0)))
 
-    vis_traj!(vis, :traj, Xref; R = 0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
-    target = mc.HyperSphere(mc.Point(0,0,0.0),0.1)
-    mc.setobject!(vis[:target], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
-    mc.setobject!(vis[:target_load], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+    # vis_traj!(vis, :traj, Xref; R = 0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
+    obs = mc.HyperSphere(mc.Point(0,0,0.0),0.4)
+    mc.setobject!(vis[:obs1], obs, mc.MeshPhongMaterial(color = mc.RGBA(0.0,0.0,0.0,0.5)))
+    mc.setobject!(vis[:obs2], obs, mc.MeshPhongMaterial(color = mc.RGBA(0.0,0.0,0.0,0.5)))
 
     anim = mc.Animation(floor(Int,1/dt))
     for k = 1:length(Xsim)
@@ -118,9 +118,11 @@ function animate_quadrotor_load(Xsim, Xref, dt)
             r_load = Xsim[k][13:15]
             mc.settransform!(vis[:vic], mc.compose(mc.Translation(r),mc.LinearMap(1.5*(dcm_from_mrp(p)))))
             mc.settransform!(vis[:load], mc.Translation(r_load))
+            mc.settransform!(vis[:obs1], mc.Translation([0.0,0.0,0.5]))
+            mc.settransform!(vis[:obs2], mc.Translation([0.0,0.0,-0.6]))
             # settransform!(vis["cable"], cable_transform(r,r_load))
-            mc.settransform!(vis[:target], mc.Translation(Xref[k][1:3]))
-            mc.settransform!(vis[:target_load], mc.Translation(Xref[k][13:15]))
+            # mc.settransform!(vis[:target], mc.Translation(Xref[k][1:3]))
+            # mc.settransform!(vis[:target_load], mc.Translation(Xref[k][13:15]))
 
             # place hole at the origin (0,0,0) orient to +x
             # mc.settransform!(vis[:cyl], [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1])
@@ -147,8 +149,15 @@ function combined_dynamics(model::NamedTuple,x,u)
     # combined dynamics
     x_lift = x[1:12]
     x_load = x[13:18]
-    u_lift = u[1:7]
-    u_load = u[8:10]
+    u_rotor = u[1:4]
+    f_rope = u[5]
+    pos_lift = x_lift[1:3]
+    pos_load = x_load[1:3]
+    load2lift = pos_load - pos_lift
+    n_load2lift = load2lift/norm(load2lift)
+
+    u_lift = [u_rotor; f_rope.*n_load2lift]
+    u_load = -f_rope.*n_load2lift
 
     x_lift_dot = quadrotor_dynamics(model,x_lift,u_lift)
     x_load_dot = load_dynamics(model,x_load,u_load)
