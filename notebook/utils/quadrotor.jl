@@ -102,10 +102,13 @@ function animate_quadrotor_load(Xsim, Xref, dt)
     # cable = Cylinder(Point3f0(0,0,0),Point3f0(0,0,0.5),convert(Float32,0.01))
     # mc.setobject!(vis[:cable], cable, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.0,0.0,1.0)))
 
+    # geom = mc.Cylinder(mc.Point3f0(-0.1,0,0.5),mc.Point3f0(0.1,0,0.5),convert(Float32,0.5))
+    # mc.setobject!(vis[:cyl],geom,mc.MeshPhongMaterial(color = mc.RGBA(1, 0, 0, 1.0)))
+
     vis_traj!(vis, :traj, Xref; R = 0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
     target = mc.HyperSphere(mc.Point(0,0,0.0),0.1)
-    mc.setobject!(vis[:target], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,0.4)))
-    mc.setobject!(vis[:target_load], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,0.4)))
+    mc.setobject!(vis[:target], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+    mc.setobject!(vis[:target_load], target, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
 
     anim = mc.Animation(floor(Int,1/dt))
     for k = 1:length(Xsim)
@@ -118,6 +121,9 @@ function animate_quadrotor_load(Xsim, Xref, dt)
             # settransform!(vis["cable"], cable_transform(r,r_load))
             mc.settransform!(vis[:target], mc.Translation(Xref[k][1:3]))
             mc.settransform!(vis[:target_load], mc.Translation(Xref[k][13:15]))
+
+            # place hole at the origin (0,0,0) orient to +x
+            # mc.settransform!(vis[:cyl], [1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1])
         end
     end
     mc.setanimation!(vis, anim)
