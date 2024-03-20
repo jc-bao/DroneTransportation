@@ -227,7 +227,7 @@ function fmincon(cost::Function,
     solver.options["max_iter"] = max_iters
     solver.options["tol"] = tol
     solver.options["constr_viol_tol"] = c_tol
-    
+
     if verbose 
         solver.options["print_level"] = 5
     else
