@@ -79,7 +79,7 @@ function constraint!(params, cval, Z)
         xi = Z[params.idx.x[i]]
         r_lift = xi[1:3]
         r_load = xi[13:15]
-        cval[params.idx.c_dist[i]] = (norm(r_lift - r_load)^2 - params.model.l^2)
+        cval[params.idx.c_dist[i-1]] = (norm(r_lift - r_load)^2 - params.model.l^2)
     end
 
     return nothing
@@ -101,11 +101,25 @@ function constraint_jacobian!(params::NamedTuple, conjac::SparseMatrixCSC, Z::Ve
         xi = Z[params.idx.x[i]]
         r_lift = xi[1:3]
         r_load = xi[13:15]
-        conjac[params.idx.c_dist[i], params.idx.x[i][1:3]] .= 2 * (r_lift - r_load)
-        conjac[params.idx.c_dist[i], params.idx.x[i][13:15]] .= 2 * (r_load - r_lift)
+        conjac[params.idx.c_dist[i-1], params.idx.x[i][1:3]] .= 2 * (r_lift - r_load)
+        conjac[params.idx.c_dist[i-1], params.idx.x[i][13:15]] .= 2 * (r_load - r_lift)
     end
 
     return nothing
+end
+
+function create_conjac(params::NamedTuple)
+    conjac = spzeros(params.idx.nc, params.idx.nz)
+    for i = 1:(params.N-1)
+        conjac[params.idx.c_dyn[i], params.idx.x[i]] .= 1.0
+        conjac[params.idx.c_dyn[i], params.idx.x[i+1]] .= 1.0
+        conjac[params.idx.c_dyn[i], params.idx.u[i]] .= 1.0
+    end
+    for i = 2:(params.N-1)
+        conjac[params.idx.c_dist[i-1], params.idx.x[i][1:3]] .= 1.0
+        conjac[params.idx.c_dist[i-1], params.idx.x[i][13:15]] .= 1.0
+    end
+    return conjac
 end
 
 ## task setup
@@ -120,27 +134,12 @@ function create_idx(nx, nu, N)
 
     # constraint indexing for the (N-1) dynamics constraints when stacked up
     c_dyn = [(i - 1) * (nx) .+ (1:nx) for i = 1:(N-1)]
-    c_dist = 1:(N-2) .+ nx*(N-1)
+    c_dist = (1:(N-2)) .+ nx*(N-1)
     nc = (N - 1) * nx + N - 2 # (N-1)*nx + N - 2
 
     return (nx=nx, nu=nu, N=N, nz=nz, nc=nc, x=x, u=u, c_dyn=c_dyn, c_dist=c_dist)
 end
 
-"""
-    quadrotor navigation
-
-Function for returning collision free trajectories for 3 quadrotors. 
-
-Outputs:
-    x::Vector{Vector}  # state trajectory for quad
-    u::Vector{Vector}  # control trajectory for quad
-    t_vec::Vector
-    params::NamedTuple
-
-The resulting trajectories should have dt=0.2, tf = 5.0, N = 26
-where all the x's are length 26, and the u's are length 25. 
-
-"""
 function quadrotor_navigation(; verbose=true)
 
     # problem size 
@@ -150,15 +149,14 @@ function quadrotor_navigation(; verbose=true)
     nu = 4 + 1
     dt = 0.1
     tf = 2.0
-    # t_vec = 0:dt:tf
-    t_vec = 0:dt:0.4
+    t_vec = 0:dt:tf
     N = length(t_vec)
 
     # indexing 
     idx = create_idx(nx, nu, N)
 
     # initial conditions and goal states 
-    xi = zeros(18)
+    xi = zeros(nx)
     xi[1] = -1.0
     xi[13] = -1.0
     xi[15] = -0.5
@@ -189,13 +187,13 @@ function quadrotor_navigation(; verbose=true)
         xi=xi,
         xf=xf,
         idx=idx,
-        r_obs=0.5,
-        obs=[[0.0, 0.0, 0.5], [0.0, 0.0, -0.6]]
+        # r_obs=0.5,
+        # obs=[[0.0, 0.0, 0.5], [0.0, 0.0, -0.6]]
     )
 
     # primal bounds
-    x_min = -Inf * ones(18)
-    x_max = Inf * ones(18)
+    x_min = -Inf * ones(nx)
+    x_max = Inf * ones(nx)
     u_min = [ones(4) .* -model.u_max; 0.0]
     u_max = [ones(4) .* model.u_max; Inf]
     Z_l = -Inf * ones(idx.nz)
@@ -235,17 +233,17 @@ function quadrotor_navigation(; verbose=true)
     conjac_FD = DiffResults.jacobian(result)
     conjac_test = spzeros(idx.nc, idx.nz)
     constraint_jacobian!(params, conjac_test, Z_test)
+    @test size(conjac_FD) == size(conjac_test)
     @test all(con .≈ 0.0)
     # compare conjac_FD and conjac_test and show the difference
-    conjac_diff = conjac_FD .- conjac_test
+    # conjac_diff = conjac_FD .- conjac_test
     # show the difference item index
     # display(conjac_FD[1:10, 1:10])
     # display(conjac_test[1:10, 1:10])
     # display(sparse(conjac_diff))
     # display(sparse(conjac_FD))
     # display(sparse(conjac_test))
-    # @test all(conjac_FD .≈ conjac_test)
-    display(sparse(conjac_test))
+    @test all(conjac_FD .≈ conjac_test)
 
     x_guess = range(params.xi, params.xf, length=params.N)
     Z0 = zeros(params.idx.nz)
@@ -260,13 +258,14 @@ function quadrotor_navigation(; verbose=true)
         end
     end
 
-    diff_type = :auto
+    conjac_tmp = create_conjac(params)
+    display(sparse(conjac_tmp))
 
     Z = nlp.sparse_fmincon(cost::Function,
         cost_gradient!::Function,
         constraint!::Function,
         constraint_jacobian!::Function,
-        conjac_test,
+        conjac_tmp,
         Z_l::Vector,
         Z_u::Vector,
         c_l::Vector,
@@ -307,10 +306,11 @@ end
 animate_quadrotor_load(xs, xs, params.model.dt)
 sleep(3.0)
 
-# plot xs and us
+# plot xyz
 # plot(t_vec, [x[1] for x in xs], label="x")
 # plot!(t_vec, [x[2] for x in xs], label="y")
-# plot!(t_vec, [x[3] for x in xs], label=`"z")
+# plot!(t_vec, [x[3] for x in xs], label="z")
+# savefig("quadrotor_navigation_xyz.png")
 # plot!(t_vec[1:end-1], [u[5] for u in us], label="u5")
 # plot!(t_vec[1:end-1], [u[6] for u in us], label="u6")
 # plot!(t_vec[1:end-1], [u[7] for u in us], label="u7")
