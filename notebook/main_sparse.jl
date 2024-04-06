@@ -174,15 +174,32 @@ function quadrotor_navigation(; verbose=true)
     nx = 12 + 6
     nu = 4 + 1
     dt = 0.05
-    tf = 4.0
+    tf = 7.0
+    rad_traj = 2.0
     t_vec = 0:dt:tf
     N = length(t_vec)
-    keyframe_r_lift = [[1.0, 0.0, 0.0], [3.0, -0.0, 0.0]]
+    keyframe_r_lift = []
+    keyframe_t_lift = []
+    nkey = 5
+    for i = 1:nkey
+        theta = 2 * pi * i / (nkey + 1)
+        r = [rad_traj * cos(theta), rad_traj * sin(theta), 0.0]
+        push!(keyframe_r_lift, r)
+        push!(keyframe_t_lift, Int(div(tf * i / (nkey + 1), dt)))
+    end
     keyframe_r_load = keyframe_r_lift
-    nkey = length(keyframe_r_lift)
-    keyframe_t_lift = [Int(div(N, nkey+1) * i) for i = 1:nkey]
+    # keyframe_t_lift = [Int(div(tf/3, dt)), Int(div(tf/3*2, dt))]
     dt_obj_drone = 0.2
-    keyframe_t_load = keyframe_t_lift .+ Int(dt_obj_drone/dt)
+    dstep = Int(div(dt_obj_drone, dt))
+    # keyframe_t_load = keyframe_t_lift .+ dstep
+    keyframe_t_load = zeros(Int, nkey)
+    for i = 1:nkey
+        if i % 2 == 0
+            keyframe_t_load[i] = keyframe_t_lift[i] - dstep
+        else
+            keyframe_t_load[i] = keyframe_t_lift[i] + dstep
+        end
+    end
     frame_err = 0.1
 
     # indexing 
@@ -190,16 +207,17 @@ function quadrotor_navigation(; verbose=true)
 
     # initial conditions and goal states 
     xi = zeros(nx)
-    xi[1] = 0.0
-    xi[13] = 0.0
+    xi[1] = rad_traj
+    xi[13] = rad_traj
     xi[15] = -0.5
-    xf = zeros(18)
-    xf[1] = 4.0
-    xf[13] = 4.0
-    xf[15] = -0.5
+    xf = xi
+    # xf = zeros(18)
+    # xf[1] = dist
+    # xf[13] = dist
+    # xf[15] = -0.5
 
     # load all useful things into params 
-    Q = diagm([0.3 * ones(3); 0.1 * ones(3); [0.1, 0.1, 1.0]; 0.1 * ones(3); 0.3 * ones(3); 0.1 * ones(3)])
+    Q = diagm([0.0 * ones(3); 0.1 * ones(3); [0.1, 0.1, 1.0]; 0.1 * ones(3); 0.0 * ones(3); 0.1 * ones(3)])
     R = diagm([0.1 * ones(4); zeros(1)])
     model = (mass=0.5, mass_load=0.5,
         J=Diagonal([0.0023, 0.0023, 0.004]),
@@ -284,13 +302,18 @@ function quadrotor_navigation(; verbose=true)
     # display(sparse(conjac_test))
     @test all(conjac_FD .≈ conjac_test)
 
-    x_guess = range(params.xi, params.xf, length=params.N)
+    # r_guess = range(params.xi, params.xf, length=params.N)
+    r_guess = zeros(params.N, 3)
+    for i = 1:params.N
+        theta = 2 * pi * i / params.N
+        r_guess[i, 1] = rad_traj * cos(theta)
+        r_guess[i, 2] = rad_traj * sin(theta)
+        r_guess[i, 3] = 0.0
+    end
     Z0 = zeros(params.idx.nz)
     for i = 1:params.N
-        Z0[params.idx.x[i][1]] = x_guess[i][1]
-        Z0[params.idx.x[i][3]] = x_guess[i][3]
-        Z0[params.idx.x[i][13]] = x_guess[i][13]
-        Z0[params.idx.x[i][15]] = x_guess[i][15]
+        Z0[params.idx.x[i][1:3]] = r_guess[i, :]
+        Z0[params.idx.x[i][13:15]] = r_guess[i, :] - [0.0, 0.0, model.l]
         if i < params.N
             Z0[params.idx.u[i]][1:4] = ones(4) .* (1.0 * 9.81 / 4.0)
             Z0[params.idx.u[i]][5] = 0.5 * 9.81
@@ -315,6 +338,7 @@ function quadrotor_navigation(; verbose=true)
         c_tol=1e-4,
         max_iters=1_000,
         verbose=true)
+    # Z = Z0
 
     # save z to file
     save("Z.jld2", "Z", Z)
@@ -342,7 +366,7 @@ end
 
 # visualize
 
-animate_quadrotor_load(xs, xs, params.model.dt)
+animate_quadrotor_load(xs, xs, params.model.dt, params)
 sleep(20.0)
 
 # plot xyz

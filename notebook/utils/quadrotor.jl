@@ -92,7 +92,7 @@ function cable_transform(y,z)
     compose(Translation(z),LinearMap(R))
 end
 
-function animate_quadrotor_load(Xsim, Xref, dt)
+function animate_quadrotor_load(Xsim, Xref, dt, params)
     # animate quadrotor, show Xref with vis_traj!, and track Xref with the green sphere
     vis = mc.Visualizer()
     robot_obj = mc.MeshFileGeometry(joinpath(@__DIR__,"quadrotor.obj"))
@@ -101,10 +101,17 @@ function animate_quadrotor_load(Xsim, Xref, dt)
     mc.setobject!(vis[:load], load_obj, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.5,1.0,1.0)))
 
     gate = mc.MeshFileGeometry(joinpath(@__DIR__,"donut.obj"))
-    mc.setobject!(vis[:gate1], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
-    # rotate gate along x axis by [pi/2, 0, 0] and scale by 2.0
-    mc.settransform!(vis[:gate1], mc.compose(mc.Translation([1.0,0,0]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
-    mc.settransform!(vis[:gate2], mc.compose(mc.Translation([3.0,0,0]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
+    # mc.setobject!(vis[:gate1], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+    # mc.setobject!(vis[:gate2], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+    # # rotate gate along x axis by [pi/2, 0, 0] and scale by 2.0
+    # mc.settransform!(vis[:gate1], mc.compose(mc.Translation(params.keyframe_r_lift[1]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
+    # mc.settransform!(vis[:gate2], mc.compose(mc.Translation(params.keyframe_r_lift[2]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
+    for i = 1:length(params.keyframe_r_lift)
+        name = "gate"*string(i)
+        mc.setobject!(vis[name], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+        theta = 2*pi*i/(length(params.keyframe_r_lift)+1)
+        mc.settransform!(vis[name], mc.compose(mc.Translation(params.keyframe_r_lift[i]), mc.LinearMap(2.0*AngleAxis(theta,0,0,1))))
+    end
     
     anim = mc.Animation(floor(Int,1/dt))
     for k = 1:length(Xsim)
