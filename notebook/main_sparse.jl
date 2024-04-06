@@ -21,6 +21,7 @@ using CoordinateTransformations
 using Printf
 using SparseArrays
 using DiffResults
+using Rotations
 import lazy_nlp_qd as nlp
 
 include(joinpath(@__DIR__, "utils", "fmincon.jl"))
@@ -82,6 +83,15 @@ function constraint!(params, cval, Z)
         cval[params.idx.c_dist[i-1]] = (norm(r_lift - r_load)^2 - params.model.l^2)
     end
 
+    for i = 1:params.nkey
+        idx_rlift_i = params.idx.x[params.keyframe_t_lift[i]][1:3]
+        r_lift = Z[idx_rlift_i]
+        cval[params.idx.c_frame_lift[i]] = norm(r_lift - params.keyframe_r_lift[i])^2 - params.frame_err^2
+        idx_rload_i = params.idx.x[params.keyframe_t_load[i]][13:15]
+        r_load = Z[idx_rload_i]
+        cval[params.idx.c_frame_load[i]] = norm(r_load - params.keyframe_r_load[i])^2 - params.frame_err^2
+    end
+
     return nothing
 end
 
@@ -104,7 +114,15 @@ function constraint_jacobian!(params::NamedTuple, conjac::SparseMatrixCSC, Z::Ve
         conjac[params.idx.c_dist[i-1], params.idx.x[i][1:3]] .= 2 * (r_lift - r_load)
         conjac[params.idx.c_dist[i-1], params.idx.x[i][13:15]] .= 2 * (r_load - r_lift)
     end
-
+    # frame lift constraints
+    for i = 1:params.nkey
+        idx_rlift_i = params.idx.x[params.keyframe_t_lift[i]][1:3]
+        r_lift = Z[idx_rlift_i]
+        conjac[params.idx.c_frame_lift[i], idx_rlift_i] .= 2 * (r_lift - params.keyframe_r_lift[i])
+        idx_rload_i = params.idx.x[params.keyframe_t_load[i]][13:15]
+        r_load = Z[idx_rload_i]
+        conjac[params.idx.c_frame_load[i], idx_rload_i] .= 2 * (r_load - params.keyframe_r_load[i])
+    end
     return nothing
 end
 
@@ -119,12 +137,18 @@ function create_conjac(params::NamedTuple)
         conjac[params.idx.c_dist[i-1], params.idx.x[i][1:3]] .= 1.0
         conjac[params.idx.c_dist[i-1], params.idx.x[i][13:15]] .= 1.0
     end
+    for i = 1:params.nkey
+        idx_rlift_i = params.idx.x[params.keyframe_t_lift[i]][1:3]
+        conjac[params.idx.c_frame_lift[i], idx_rlift_i] .= 1.0
+        idx_rload_i = params.idx.x[params.keyframe_t_load[i]][13:15]   
+        conjac[params.idx.c_frame_load[i], idx_rload_i] .= 1.0
+    end
     return conjac
 end
 
 ## task setup
 
-function create_idx(nx, nu, N)
+function create_idx(nx, nu, nkey, N)
     # This function creates some useful indexing tools for Z 
 
     # our Z vector is [xi, u0, x1, u1, …, xN]
@@ -135,9 +159,11 @@ function create_idx(nx, nu, N)
     # constraint indexing for the (N-1) dynamics constraints when stacked up
     c_dyn = [(i - 1) * (nx) .+ (1:nx) for i = 1:(N-1)]
     c_dist = (1:(N-2)) .+ nx*(N-1)
-    nc = (N - 1) * nx + N - 2 # (N-1)*nx + N - 2
+    c_frame_lift = (1:nkey) .+ nx*(N-1) .+ (N-2)
+    c_frame_load = (1:nkey) .+ nx*(N-1) .+ nkey .+ (N-2)
+    nc = nx * (N - 1) + N - 2 + nkey * 2
 
-    return (nx=nx, nu=nu, N=N, nz=nz, nc=nc, x=x, u=u, c_dyn=c_dyn, c_dist=c_dist)
+    return (nx=nx, nu=nu, N=N, nz=nz, nc=nc, x=x, u=u, c_dyn=c_dyn, c_dist=c_dist, c_frame_lift=c_frame_lift, c_frame_load=c_frame_load)
 end
 
 function quadrotor_navigation(; verbose=true)
@@ -147,26 +173,33 @@ function quadrotor_navigation(; verbose=true)
     nx_load = 6
     nx = 12 + 6
     nu = 4 + 1
-    dt = 0.1
-    tf = 2.0
+    dt = 0.05
+    tf = 4.0
     t_vec = 0:dt:tf
     N = length(t_vec)
+    keyframe_r_lift = [[1.0, 0.0, 0.0], [3.0, -0.0, 0.0]]
+    keyframe_r_load = keyframe_r_lift
+    nkey = length(keyframe_r_lift)
+    keyframe_t_lift = [Int(div(N, nkey+1) * i) for i = 1:nkey]
+    dt_obj_drone = 0.2
+    keyframe_t_load = keyframe_t_lift .+ Int(dt_obj_drone/dt)
+    frame_err = 0.1
 
     # indexing 
-    idx = create_idx(nx, nu, N)
+    idx = create_idx(nx, nu, nkey, N)
 
     # initial conditions and goal states 
     xi = zeros(nx)
-    xi[1] = -1.0
-    xi[13] = -1.0
+    xi[1] = 0.0
+    xi[13] = 0.0
     xi[15] = -0.5
     xf = zeros(18)
-    xf[1] = 1.0
-    xf[13] = 1.0
+    xf[1] = 4.0
+    xf[13] = 4.0
     xf[15] = -0.5
 
     # load all useful things into params 
-    Q = 1.0 * diagm([1.0 * ones(3); 0.1 * ones(3); 1.0 * ones(3); 1.0 * ones(3); 1.0 * ones(3); 0.1 * ones(3)])
+    Q = diagm([0.3 * ones(3); 0.1 * ones(3); [0.1, 0.1, 1.0]; 0.1 * ones(3); 0.3 * ones(3); 0.1 * ones(3)])
     R = diagm([0.1 * ones(4); zeros(1)])
     model = (mass=0.5, mass_load=0.5,
         J=Diagonal([0.0023, 0.0023, 0.004]),
@@ -187,6 +220,12 @@ function quadrotor_navigation(; verbose=true)
         xi=xi,
         xf=xf,
         idx=idx,
+        keyframe_r_lift = keyframe_r_lift,
+        keyframe_r_load = keyframe_r_load,
+        keyframe_t_lift = keyframe_t_lift,
+        keyframe_t_load = keyframe_t_load,
+        frame_err = frame_err,
+        nkey = nkey,
         # r_obs=0.5,
         # obs=[[0.0, 0.0, 0.5], [0.0, 0.0, -0.6]]
     )
@@ -234,7 +273,7 @@ function quadrotor_navigation(; verbose=true)
     conjac_test = spzeros(idx.nc, idx.nz)
     constraint_jacobian!(params, conjac_test, Z_test)
     @test size(conjac_FD) == size(conjac_test)
-    @test all(con .≈ 0.0)
+    @test all(con[1:idx.nc-nkey*2] .≈ 0.0)
     # compare conjac_FD and conjac_test and show the difference
     # conjac_diff = conjac_FD .- conjac_test
     # show the difference item index
@@ -304,7 +343,7 @@ end
 # visualize
 
 animate_quadrotor_load(xs, xs, params.model.dt)
-sleep(3.0)
+sleep(20.0)
 
 # plot xyz
 # plot(t_vec, [x[1] for x in xs], label="x")

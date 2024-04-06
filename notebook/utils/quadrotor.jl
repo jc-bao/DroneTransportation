@@ -96,30 +96,24 @@ function animate_quadrotor_load(Xsim, Xref, dt)
     # animate quadrotor, show Xref with vis_traj!, and track Xref with the green sphere
     vis = mc.Visualizer()
     robot_obj = mc.MeshFileGeometry(joinpath(@__DIR__,"quadrotor.obj"))
-    mc.setobject!(vis[:vic], robot_obj)
-    load_obj = mc.HyperSphere(mc.Point(0,0,0.0),0.05)
-    mc.setobject!(vis[:load], load_obj, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.0,1.0,1.0)))
-    # cable = Cylinder(Point3f0(0,0,0),Point3f0(0,0,0.5),convert(Float32,0.01))
-    # mc.setobject!(vis[:cable], cable, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.0,0.0,1.0)))
+    mc.setobject!(vis[:vic], robot_obj, mc.MeshPhongMaterial(color = mc.RGBA(0.1,0.1,0.1,1.0)))
+    load_obj = mc.HyperSphere(mc.Point(0,0,0.0),0.03)
+    mc.setobject!(vis[:load], load_obj, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.5,1.0,1.0)))
 
-    # geom = mc.Cylinder(mc.Point3f0(-0.1,0,0.5),mc.Point3f0(0.1,0,0.5),convert(Float32,0.5))
-    # mc.setobject!(vis[:cyl],geom,mc.MeshPhongMaterial(color = mc.RGBA(1, 0, 0, 1.0)))
-
-    # vis_traj!(vis, :traj, Xref; R = 0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
-    obs = mc.HyperSphere(mc.Point(0,0,0.0),0.4)
-    mc.setobject!(vis[:obs1], obs, mc.MeshPhongMaterial(color = mc.RGBA(0.0,0.0,0.0,0.5)))
-    mc.setobject!(vis[:obs2], obs, mc.MeshPhongMaterial(color = mc.RGBA(0.0,0.0,0.0,0.5)))
-
+    gate = mc.MeshFileGeometry(joinpath(@__DIR__,"donut.obj"))
+    mc.setobject!(vis[:gate1], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
+    # rotate gate along x axis by [pi/2, 0, 0] and scale by 2.0
+    mc.settransform!(vis[:gate1], mc.compose(mc.Translation([1.0,0,0]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
+    mc.settransform!(vis[:gate2], mc.compose(mc.Translation([3.0,0,0]), mc.LinearMap(AngleAxis(pi/2,0,1,0).*2.0)))
+    
     anim = mc.Animation(floor(Int,1/dt))
     for k = 1:length(Xsim)
         mc.atframe(anim, k) do
             r = Xsim[k][1:3]
             p = Xsim[k][7:9]
             r_load = Xsim[k][13:15]
-            mc.settransform!(vis[:vic], mc.compose(mc.Translation(r),mc.LinearMap(1.5*(dcm_from_mrp(p)))))
+            mc.settransform!(vis[:vic], mc.compose(mc.Translation(r),mc.LinearMap(0.5*(dcm_from_mrp(p)))))
             mc.settransform!(vis[:load], mc.Translation(r_load))
-            mc.settransform!(vis[:obs1], mc.Translation([0.0,0.0,0.5]))
-            mc.settransform!(vis[:obs2], mc.Translation([0.0,0.0,-0.6]))
             # settransform!(vis["cable"], cable_transform(r,r_load))
             # mc.settransform!(vis[:target], mc.Translation(Xref[k][1:3]))
             # mc.settransform!(vis[:target_load], mc.Translation(Xref[k][13:15]))
