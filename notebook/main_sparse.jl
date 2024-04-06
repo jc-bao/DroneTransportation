@@ -19,6 +19,8 @@ using GeometryTypes
 using MeshIO
 using CoordinateTransformations
 using Printf
+using SparseArrays
+using DiffResults
 import lazy_nlp_qd as nlp
 
 include(joinpath(@__DIR__, "utils", "fmincon.jl"))
@@ -26,7 +28,7 @@ include(joinpath(@__DIR__, "utils", "quadrotor.jl"))
 
 ## cost
 
-function task_cost(params::NamedTuple, Z::Vector)::Real
+function cost(params::NamedTuple, Z::Vector)::Real
     # compute the cost 
     xend = Z[params.idx.x[end]]
     J = (xend - params.xf)' * params.Q * (xend - params.xf)
@@ -36,6 +38,11 @@ function task_cost(params::NamedTuple, Z::Vector)::Real
         J += (x - params.xf)' * params.Q * (x - params.xf) + u' * params.R * u
     end
     return J
+end
+
+function cost_gradient!(params::NamedTuple, grad::Vector, Z::Vector)
+    grad .= FD.gradient(_Z -> cost(params, _Z), Z)
+    return nothing
 end
 
 # equality constraint
@@ -56,49 +63,49 @@ function hermite_simpson(params::NamedTuple, x1::Vector, x2::Vector, u, dt::Real
            ) - x2
 end
 
-function eq_constraints(params::NamedTuple, Z::Vector)::Vector
+## converted constrains for sparse problem
 
-    c_dyn = zeros(eltype(Z), 19 * (params.N - 1))
+function constraint!(params, cval, Z)
+    # equality constraints
+    for i = 1:(params.N-1)
+        xi = Z[params.idx.x[i]]
+        xip1 = Z[params.idx.x[i+1]]
+        ui = Z[params.idx.u[i]]
+        # dynamics constraints
+        cval[params.idx.c_dyn[i]] .= hermite_simpson(params, xi, xip1, ui, params.model.dt)
+    end
+
+    for i = 2:(params.N-1)
+        xi = Z[params.idx.x[i]]
+        r_lift = xi[1:3]
+        r_load = xi[13:15]
+        cval[params.idx.c_dist[i]] = (norm(r_lift - r_load)^2 - params.model.l^2)
+    end
+
+    return nothing
+end
+
+function constraint_jacobian!(params::NamedTuple, conjac::SparseMatrixCSC, Z::Vector)
     # dynamic constrains
     for i = 1:(params.N-1)
         xi = Z[params.idx.x[i]]
         xip1 = Z[params.idx.x[i+1]]
         ui = Z[params.idx.u[i]]
         # dynamics constraints
-        c_dyn[19*(i-1).+(1:18)] = hermite_simpson(params, xi, xip1, ui, params.model.dt)
-        # distance constraints
+        conjac[params.idx.c_dyn[i], params.idx.x[i]] .= FD.jacobian(_xi -> hermite_simpson(params, _xi, xip1, ui, params.model.dt), xi)
+        conjac[params.idx.c_dyn[i], params.idx.x[i+1]] .= FD.jacobian(_xip1 -> hermite_simpson(params, xi, _xip1, ui, params.model.dt), xip1)
+        conjac[params.idx.c_dyn[i], params.idx.u[i]] .= FD.jacobian(_ui -> hermite_simpson(params, xi, xip1, _ui, params.model.dt), ui)
+    end
+    # distance constraints
+    for i = 2:(params.N-1)
+        xi = Z[params.idx.x[i]]
         r_lift = xi[1:3]
         r_load = xi[13:15]
-        c_dyn[19*(i-1)+19] = norm(r_lift - r_load)^2 - params.model.l^2
+        conjac[params.idx.c_dist[i], params.idx.x[i][1:3]] .= 2 * (r_lift - r_load)
+        conjac[params.idx.c_dist[i], params.idx.x[i][13:15]] .= 2 * (r_load - r_lift)
     end
 
-    # initial condition
-    x1 = Z[params.idx.x[1]]
-    c_init = x1 - params.xi
-
-    # final condition
-    xf = Z[params.idx.x[end]]
-    c_end = xf - params.xf
-
-    return [c_init; c_end; c_dyn]
-end
-
-## inequality constraint
-
-function ineq_constraints(params::NamedTuple, Z::Vector)::Vector
-    c = []
-    for i = 1:(params.N-1)
-        u = Z[params.idx.u[i]]
-        # control limits
-        c = [c; u[1:4]]
-        # state constraints
-        x = Z[params.idx.x[i+1]]
-        for pos_obs in params.obs
-            c = [c; norm(x[1:2:3]-pos_obs[1:2:3])^2 - params.r_obs^2]
-            c = [c; norm(x[13:2:15]-pos_obs[1:2:3])^2 - params.r_obs^2]
-        end
-    end
-    return c
+    return nothing
 end
 
 ## task setup
@@ -112,10 +119,11 @@ function create_idx(nx, nu, N)
     u = [(i - 1) * (nx + nu) .+ ((nx+1):(nx+nu)) for i = 1:(N-1)]
 
     # constraint indexing for the (N-1) dynamics constraints when stacked up
-    c = [(i - 1) * (nx) .+ (1:nx) for i = 1:(N-1)]
-    nc = (N - 1) * nx # (N-1)*nx 
+    c_dyn = [(i - 1) * (nx) .+ (1:nx) for i = 1:(N-1)]
+    c_dist = 1:(N-2) .+ nx*(N-1)
+    nc = (N - 1) * nx + N - 2 # (N-1)*nx + N - 2
 
-    return (nx=nx, nu=nu, N=N, nz=nz, nc=nc, x=x, u=u, c=c)
+    return (nx=nx, nu=nu, N=N, nz=nz, nc=nc, x=x, u=u, c_dyn=c_dyn, c_dist=c_dist)
 end
 
 """
@@ -142,7 +150,8 @@ function quadrotor_navigation(; verbose=true)
     nu = 4 + 1
     dt = 0.1
     tf = 2.0
-    t_vec = 0:dt:tf
+    # t_vec = 0:dt:tf
+    t_vec = 0:dt:0.4
     N = length(t_vec)
 
     # indexing 
@@ -179,13 +188,34 @@ function quadrotor_navigation(; verbose=true)
         model=model,
         xi=xi,
         xf=xf,
-        idx=idx, 
-        r_obs=0.5, 
+        idx=idx,
+        r_obs=0.5,
         obs=[[0.0, 0.0, 0.5], [0.0, 0.0, -0.6]]
     )
 
-    c_l = zeros((4+2*2) * (N - 1))
-    c_u = repeat([ones(4) .* params.model.u_max; ones(2*2).*Inf], N - 1)
+    # primal bounds
+    x_min = -Inf * ones(18)
+    x_max = Inf * ones(18)
+    u_min = [ones(4) .* -model.u_max; 0.0]
+    u_max = [ones(4) .* model.u_max; Inf]
+    Z_l = -Inf * ones(idx.nz)
+    Z_u = Inf * ones(idx.nz)
+    Z_l[idx.x[1]] .= xi
+    Z_u[idx.x[1]] .= xi
+    for i = 1:(N-1)
+        Z_l[idx.u[i]] .= u_min
+        Z_u[idx.u[i]] .= u_max
+    end
+    for i = 2:(N-1)
+        Z_l[idx.x[i]] .= x_min
+        Z_u[idx.x[i]] .= x_max
+    end
+    Z_l[idx.x[N]] .= xf
+    Z_u[idx.x[N]] .= xf
+
+    # constrains bounds
+    c_l = zeros(idx.nc)
+    c_u = zeros(idx.nc)
 
     # test constrain feasibility
     # test constrains
@@ -198,44 +228,55 @@ function quadrotor_navigation(; verbose=true)
     Z_test = repeat(xu_test, N - 1)
     Z_test = [Z_test; x_test]
 
-    @test all(eq_constraints(params, Z_test)[37:end] .≈ 0.0)
-    @test all(ineq_constraints(params, Z_test) ≤ c_u)
-    @test all(ineq_constraints(params, Z_test) ≥ c_l)
+    con = zeros(idx.nc)
+    constraint!(params, con, Z_test)
+    result = DiffResults.JacobianResult(con, Z_test)
+    FD.jacobian!(result, (_con, _Z) -> constraint!(params, _con, _Z), con, Z_test)
+    conjac_FD = DiffResults.jacobian(result)
+    conjac_test = spzeros(idx.nc, idx.nz)
+    constraint_jacobian!(params, conjac_test, Z_test)
+    @test all(con .≈ 0.0)
+    # compare conjac_FD and conjac_test and show the difference
+    conjac_diff = conjac_FD .- conjac_test
+    # show the difference item index
+    # display(conjac_FD[1:10, 1:10])
+    # display(conjac_test[1:10, 1:10])
+    # display(sparse(conjac_diff))
+    # display(sparse(conjac_FD))
+    # display(sparse(conjac_test))
+    # @test all(conjac_FD .≈ conjac_test)
+    display(sparse(conjac_test))
 
     x_guess = range(params.xi, params.xf, length=params.N)
-    z0 = zeros(params.idx.nz)
+    Z0 = zeros(params.idx.nz)
     for i = 1:params.N
-        z0[params.idx.x[i][1]] = x_guess[i][1]
-        z0[params.idx.x[i][3]] = x_guess[i][3]
-        z0[params.idx.x[i][13]] = x_guess[i][13]
-        z0[params.idx.x[i][15]] = x_guess[i][15]
+        Z0[params.idx.x[i][1]] = x_guess[i][1]
+        Z0[params.idx.x[i][3]] = x_guess[i][3]
+        Z0[params.idx.x[i][13]] = x_guess[i][13]
+        Z0[params.idx.x[i][15]] = x_guess[i][15]
         if i < params.N
-            z0[params.idx.u[i]][1:4] = ones(4) .* (1.0 * 9.81 / 4.0)
-            z0[params.idx.u[i]][5] = 0.5 * 9.81
+            Z0[params.idx.u[i]][1:4] = ones(4) .* (1.0 * 9.81 / 4.0)
+            Z0[params.idx.u[i]][5] = 0.5 * 9.81
         end
     end
 
-    # load file .jld2 as initial guess
-    z0 = load("Z.jld2")["Z"]
-
     diff_type = :auto
 
-    Z = fmincon(
-        task_cost,
-        eq_constraints,
-        ineq_constraints,
-        ones(params.idx.nz) .* -Inf,
-        ones(params.idx.nz) .* Inf,
-        c_l,
-        c_u,
-        z0,
-        params,
-        diff_type;
-        tol=1e-5,
-        c_tol=1e-5,
+    Z = nlp.sparse_fmincon(cost::Function,
+        cost_gradient!::Function,
+        constraint!::Function,
+        constraint_jacobian!::Function,
+        conjac_test,
+        Z_l::Vector,
+        Z_u::Vector,
+        c_l::Vector,
+        c_u::Vector,
+        Z0::Vector,
+        params::NamedTuple;
+        tol=1e-4,
+        c_tol=1e-4,
         max_iters=1_000,
-        verbose=verbose
-    )
+        verbose=true)
 
     # save z to file
     save("Z.jld2", "Z", Z)
