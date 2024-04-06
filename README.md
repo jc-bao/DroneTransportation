@@ -1,11 +1,20 @@
 # CMU 16-745 Project: agile drone transportation
 
 
+## Drone transportation task with optimal control
 
-https://github.com/jc-bao/DroneTransportation/assets/60093981/33b8363f-fb1a-4ccb-854d-954e5788d438
+ | Standard Policy | Aggresive Policy |
+ | --- | --- |
+ | ![standard](assets/perodic_policy.gif) | ![aggressive](assets/swing_policy.gif) |
+ | ![long horizon](assets/longhorizon.gif) | ![aggresive move](assets/aggresive_move.gif) |
 
 
+ ## Usage
 
-## Current issue
-
-1. cannot put cylinder in. 
+```bash
+cd notebook
+# dense solver
+julia main.jl
+# sparse solver (recommended)
+julia main_sparse.jl
+```
