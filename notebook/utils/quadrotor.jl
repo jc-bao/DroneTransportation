@@ -100,6 +100,13 @@ function animate_quadrotor_load(Xsim, Xref, dt, params)
     load_obj = mc.HyperSphere(mc.Point(0,0,0.0),0.03)
     mc.setobject!(vis[:load], load_obj, mc.MeshPhongMaterial(color = mc.RGBA(1.0,0.5,1.0,1.0)))
 
+    # create dots to show the trajectory 
+    vis_traj!(vis, :traj, Xsim, R=0.01, color = mc.RGBA(0.0, 1.0, 0.0, 1.0))
+    Xload = [x[13:15] for x in Xsim]
+    vis_traj!(vis, :traj_load, Xload, R=0.01, color = mc.RGBA(1.0, 0.0, 0.0, 1.0))
+
+    # gate
+
     gate = mc.MeshFileGeometry(joinpath(@__DIR__,"donut.obj"))
     # mc.setobject!(vis[:gate1], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
     # mc.setobject!(vis[:gate2], gate, mc.MeshPhongMaterial(color = mc.RGBA(0.0,1.0,0.0,1.0)))
