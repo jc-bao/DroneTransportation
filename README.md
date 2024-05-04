@@ -12,9 +12,5 @@
  ## Usage
 
 ```bash
-cd notebook
-# dense solver
 julia main.jl
-# sparse solver (recommended)
-julia main_sparse.jl
 ```
